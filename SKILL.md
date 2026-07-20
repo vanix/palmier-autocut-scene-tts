@@ -38,6 +38,8 @@ description: >
 | Ollama API | `http://127.0.0.1:11434/api/generate` | 否 |
 | TTS 引擎 | edge-tts | 否 |
 | TTS 語音 | `zh-TW-YunJheNeural`（男聲） | 問卷 ANS_5 |
+| BGM 風格 | 視 ANS_6（`不需要` / `輕鬆` / `活潑` / `寧靜` / 自訂） | 問卷 ANS_6 |
+| BGM 來源 | Pixabay Music（CC0 免費授權） | 否 |
 | 暫存目錄 | `temp/`（素材根目錄下） | 否 |
 
 ## Phase 1：互動問卷
@@ -51,6 +53,7 @@ description: >
 | ANS_3 | **每個場景固定秒數？** | `5` |
 | ANS_4 | **旁白口吻偏好？**（輕鬆 / 活潑 / 簡潔） | `輕鬆` |
 | ANS_5 | **TTS 語音？**（`男聲` / `女聲`） | `男聲` |
+| ANS_6 | **背景音樂風格？**（`不需要` / `輕鬆` / `活潑` / `寧靜` / `自訂描述`） | `不需要` |
 
 問完後格式化輸出給使用者確認，再開始執行。
 
@@ -61,6 +64,7 @@ description: >
 場景秒數: 5
 旁白風格: 輕鬆
 TTS 語音: 男聲
+BGM 風格: 輕鬆
 ================
 正確嗎？（回答 y / n）
 ```
@@ -74,7 +78,7 @@ TTS 語音: 男聲
 ```
 TEMP_DIR = ANS_1 + "/temp/"
 SCRIPTS_DIR = TEMP_DIR + "scripts/"
-mkdir -p SCRIPTS_DIR TEMP_DIR/scenes TEMP_DIR/thumbs TEMP_DIR/tts
+mkdir -p SCRIPTS_DIR TEMP_DIR/scenes TEMP_DIR/thumbs TEMP_DIR/tts TEMP_DIR/bgm
 ```
 
 ### Step 2 — 建立並執行 `run_scene_detect.py`
@@ -622,6 +626,67 @@ python3 "$SCRIPTS_DIR/generate_tts.py" "ANS_1" --voice zh-TW-HsiaoChenNeural
 
 ---
 
+## Phase 4c：CC0 背景音樂（依 ANS_6）
+
+**若 ANS_6 為「不需要」，跳過此階段。**
+
+### Step — 搜尋 CC0 BGM
+
+用 `websearch` 搜尋無版權音樂，關鍵字範例：
+
+```
+pixabay music [風格] free download royalty free background music
+uppbeat [style] free background music
+youtube audio library [genre] no copyright
+```
+
+例如 ANS_6 = 「輕鬆」：
+
+```
+pixabay music relaxing travel background music free download
+```
+
+### Step — 確認授權並下載
+
+從搜尋結果中選一首：
+- 確認標示 **CC0 / Royalty Free / No Copyright**
+- 用 `webfetch` 或直接 `import_media` 下載 MP3 到 `temp/bgm/`
+
+```bash
+# 下載 BGM 到 temp/bgm/
+import_media(source={url: "https://..."})
+# 或手動下載
+curl -L -o "ANS_1/temp/bgm/bgm.mp3" "https://..."
+```
+
+### Step — 記錄 BGM 資訊
+
+在 `temp/manifest.json` 寫入 BGM 資訊：
+
+```python
+import json
+with open("ANS_1/temp/manifest.json") as f:
+    manifest = json.load(f)
+
+# 視 manifest 為 dict，在最上層寫入 bgm
+bgm_info = {
+    "bgm_file": "ANS_1/temp/bgm/bgm.mp3",
+    "bgm_name": "曲名",
+    "bgm_duration": 120,  # 秒
+    "bgm_license": "CC0 / Pixabay",
+}
+
+# 或存在 manifest 最尾端（若為 list 則用此方式）
+with open("ANS_1/temp/manifest.json", "w") as f:
+    json.dump(manifest, f, ensure_ascii=False, indent=2)
+```
+
+**產出：**
+- `temp/bgm/bgm.mp3` — 下載的 CC0 背景音樂
+- `temp/manifest.json` 記錄 BGM 路徑與授權
+
+---
+
 ## Phase 5：輸出四種格式
 
 ### Step 12 — 建立並執行 `export_scripts.py`
@@ -704,7 +769,13 @@ def main():
             "total_scenes": len(active),
             "total_duration_sec": round(total_sec, 1),
         },
-        "scenes": []
+        "scenes": [],
+        "bgm": manifest.get("bgm", manifest.get("bgm_file") and {
+            "file": manifest["bgm_file"],
+            "name": manifest.get("bgm_name", ""),
+            "duration_sec": manifest.get("bgm_duration", 0),
+            "license": manifest.get("bgm_license", ""),
+        }) or None,
     }
 
     for item in active:
@@ -796,11 +867,12 @@ python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
 ### Step 13 — 驗證輸出
 
 確認根目錄下有：
-- `palmier_script.json` — 含每個場景的 **tts_file** 路徑
+- `palmier_script.json` — 含每個場景的 **tts_file** + 專案的 **bgm** 資訊
 - `subtitles.srt` — 標準字幕
 - `script_narrative.txt` — 腳本文字
 
 確認 `temp/tts/` 下有對應的 `.mp3` 音檔。
+確認 `temp/bgm/` 下有 `.mp3` BGM（如 ANS_6 有指定）。
 
 ---
 
@@ -810,11 +882,11 @@ python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
 
 ```
 素材資料夾/
-├── palmier_script.json       ← → 給 Palmier Pro MCP（含 tts_file 路徑）
+├── palmier_script.json       ← → 給 Palmier Pro MCP（含 tts_file + bgm）
 ├── subtitles.srt              ← → 字幕檔
 ├── script_narrative.txt      ← → 給人看的腳本
 └── temp/                     ← 暫存檔（可清空）
-    ├── manifest.json         ← 完整場景清單（含描述、旁白、TTS）
+    ├── manifest.json         ← 完整場景清單（含描述、旁白、TTS、BGM）
     ├── scripts/
     │   ├── run_scene_detect.py
     │   ├── qwen_describe.py
@@ -822,7 +894,8 @@ python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
     │   └── export_scripts.py
     ├── scenes/               ← 切割後的獨立場景 MP4
     ├── thumbs/               ← 480px 縮圖（視覺描述用）
-    └── tts/                  ← edge-tts 旁白音檔 MP3
+    ├── tts/                  ← edge-tts 旁白音檔 MP3
+    └── bgm/                  ← CC0 背景音樂 MP3
 ```
 
 ## Palmier Script JSON 規格
@@ -910,6 +983,37 @@ for item in script.scenes:
 | `update_text` | 修正字幕內容或樣式 |
 | `export_project` | 輸出成品 |
 
+### BGM 音軌（Palmier Pro 側）
+
+如 `palmier_script.json` 含 `bgm` 欄位：
+
+```python
+# 1. 匯入 BGM
+bgm_ref = import_media(source={path: script.bgm.file}).mediaRef
+
+# 2. 取得總長度（frames）
+total_frames = script.project.total_duration_sec * script.project.fps
+
+# 3. 建立獨立音軌
+manage_tracks(set=[{"trackId": audio_track_id, "muted": False}])
+
+# 4. 放 BGM 到整條 timeline（從 frame 0 到結束）
+#    BGM 可能比 timeline 長或短，用 source 截取或讓它 loop
+add_clips(entries=[{
+    "mediaRef": bgm_ref,
+    "startFrame": 0,
+    "endFrame": total_frames,
+    "trackIndex": bgm_track_index
+}])
+
+# 5. 調整 BGM 音量（不要蓋過旁白）
+set_clip_properties(clipIds=[bgm_clip_id], volume=0.08)
+
+# 6. 淡入淡出
+set_keyframes(clipId=bgm_clip_id, property="volume",
+              keyframes=[[0, 0], [60, 0.08], [total_frames-60, 0.08], [total_frames, 0]])
+```
+
 ## 經驗教訓
 
 | # | 教訓 | 說明 |
@@ -921,3 +1025,6 @@ for item in script.scenes:
 | 5 | **HEIC 照片直接給 Palmier 處理** | 不需預轉 JPG，Palmier 原生支援 |
 | 6 | **先 remove_silence 再放 BGM** | silence 的 ripple 會切裂已定位的 BGM track |
 | 7 | **TTS 音檔在 Palmier 側上旁白軌** | edge-tts 產生的 MP3 經 `import_media` 匯入後，用 `add_clips` 放到獨立的旁白音軌，不要混入原始素材音軌 |
+| 8 | **BGM 音量要低於旁白** | 背景音樂設 volume 0.05-0.1，不要蓋過原片音軌或 TTS。淡入 2s、淡出 2s |
+| 9 | **BGM 在 timeline 定位後不要 ripple** | `remove_silence()` 或 ripple 操作會切裂已定位的 BGM track。先定位素材、silence、TTS，最後才放 BGM |
+| 10 | **確認 CC0 授權** | 搜到的 BGM 一定要確認是 CC0 / Royalty Free，避免版權爭議 |
