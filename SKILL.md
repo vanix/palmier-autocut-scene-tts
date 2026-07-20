@@ -2,9 +2,10 @@
 name: palmier-autocut-scene-tts
 description: >
   Scene-based 剪片流程：ffmpeg 場景偵測 → Qwen2.5VL 視覺描述 →
-  opencode 旁白修正 → 輸出 Palmier Script JSON + SRT + 腳本文字檔。
+  opencode 旁白撰寫 → edge-tts 語音合成 →
+  輸出 Palmier Script JSON + SRT + 腳本文字檔 + TTS 音檔。
   適用於旅遊、開箱、活動記錄等場景式素材。不需使用者具備技術知識。
-  Trigger keywords: 剪片段, 場景剪輯, 剪片, scene editing, video scene,
+  Trigger keywords: 幫我切場景剪片, 切場景剪片, 場景剪輯, 剪片, scene editing,
   開箱影片, 旅遊影片剪輯, 自動旁白
 ---
 
@@ -19,8 +20,9 @@ description: >
 | 3 | **視覺模型明顯誤判 → 跳過** | Qwen 描述與畫面不符時（例如「展覽館門口」實際是點餐櫃檯），不硬湊旁白，以檔名為準重寫。仍無法判斷則跳過 |
 | 4 | **旁白輕鬆口語** | 像在跟朋友聊天，不用書面語或旅遊雜誌體。善用檔名梗 |
 | 5 | **同一來源多段子場景內容重複 → 只留關鍵** | 如同支手機錄影拍 10 段 App 畫面，只保留 2-3 個代表性片段 |
-| 6 | **最終產出三種格式** | `palmier_script.json`（給 MCP）+ `subtitles.srt`（字幕）+ `script_narrative.txt`（給人看的腳本） |
-| 7 | **步驟失敗 → retry 一次，再失敗則告知使用者** | 不要靜靜卡住或假設成功 |
+| 6 | **暫存檔全進 `temp/`** | 場景影片、縮圖、腳本、manifest 都放在 `temp/` 下，素材根目錄只留原始檔與最終產出 |
+| 7 | **最終產出四種格式** | `palmier_script.json`（給 MCP）+ `subtitles.srt`（字幕）+ `script_narrative.txt`（給人看的腳本）+ `temp/tts/*.mp3`（旁白音檔） |
+| 8 | **步驟失敗 → retry 一次，再失敗則告知使用者** | 不要靜靜卡住或假設成功 |
 
 ## 預設值
 
@@ -34,6 +36,9 @@ description: >
 | 旁白語言 | 正體中文 | 否 |
 | 視覺模型 | `qwen2.5vl:7b` | 否 |
 | Ollama API | `http://127.0.0.1:11434/api/generate` | 否 |
+| TTS 引擎 | edge-tts | 否 |
+| TTS 語音 | `zh-TW-YunJheNeural`（男聲） | 問卷 ANS_5 |
+| 暫存目錄 | `temp/`（素材根目錄下） | 否 |
 
 ## Phase 1：互動問卷
 
@@ -45,6 +50,7 @@ description: >
 | ANS_2 | **跳過的檔案？**（多檔以逗號分隔，例如 `商務艙開箱_1.MP4,IMG_001.MOV`；留空則全部採用） | 空 |
 | ANS_3 | **每個場景固定秒數？** | `5` |
 | ANS_4 | **旁白口吻偏好？**（輕鬆 / 活潑 / 簡潔） | `輕鬆` |
+| ANS_5 | **TTS 語音？**（`男聲` / `女聲`） | `男聲` |
 
 問完後格式化輸出給使用者確認，再開始執行。
 
@@ -54,6 +60,7 @@ description: >
 跳過檔案: 商務艙開箱_1.MP4
 場景秒數: 5
 旁白風格: 輕鬆
+TTS 語音: 男聲
 ================
 正確嗎？（回答 y / n）
 ```
@@ -62,11 +69,12 @@ description: >
 
 ## Phase 2：素材整理與場景切割
 
-### Step 1 — 建立腳本目錄
+### Step 1 — 建立暫存目錄
 
 ```
-SCRIPTS_DIR = ANS_1 + "/scripts/"
-mkdir -p SCRIPTS_DIR
+TEMP_DIR = ANS_1 + "/temp/"
+SCRIPTS_DIR = TEMP_DIR + "scripts/"
+mkdir -p SCRIPTS_DIR TEMP_DIR/scenes TEMP_DIR/thumbs TEMP_DIR/tts
 ```
 
 ### Step 2 — 建立並執行 `run_scene_detect.py`
@@ -77,7 +85,7 @@ mkdir -p SCRIPTS_DIR
 #!/usr/bin/env python3
 """Phase 2: Scene detection + clip extraction.
 Scans ANS_1 for MP4/MOV/HEIC files, runs ffmpeg scene detection,
-extracts clips, writes manifest.json.
+extracts clips, writes temp/manifest.json.
 
 Usage: python3 run_scene_detect.py <素材路徑> [--skip 檔名,檔名] [--duration 秒]
 
@@ -113,8 +121,9 @@ def main():
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir).expanduser().resolve()
-    scenes_dir = source_dir / "siglip_scenes"
-    scenes_dir.mkdir(exist_ok=True)
+    temp_dir = source_dir / "temp"
+    scenes_dir = temp_dir / "scenes"
+    scenes_dir.mkdir(parents=True, exist_ok=True)
 
     skip_list = [s.strip() for s in args.skip.split(",") if s.strip()]
 
@@ -259,7 +268,7 @@ def main():
             print(f"  [{scene_idx:04d}] 🎬 {filepath.name}  [{start_sec:.1f}s-{start_sec+clip_dur:.1f}s] {clip_dur:.1f}s")
 
     # Write manifest
-    manifest_path = source_dir / "manifest.json"
+    manifest_path = temp_dir / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
@@ -281,9 +290,13 @@ python3 "$SCRIPTS_DIR/run_scene_detect.py" "ANS_1" \
   --duration ANS_3
 ```
 
+**產出：**
+- `temp/scenes/scene_0001_*.mp4` — 切割後的場景影片
+- `temp/manifest.json` — 場景清單
+
 ### Step 3 — 確認輸出
 
-確認 `manifest.json` 已產生，且 `siglip_scenes/` 目錄有對應的場景檔案。
+確認 `temp/manifest.json` 已產生，且 `temp/scenes/` 目錄有對應的場景檔案。
 
 ---
 
@@ -291,29 +304,15 @@ python3 "$SCRIPTS_DIR/run_scene_detect.py" "ANS_1" \
 
 ### Step 4 — 縮圖提取
 
-對每個 video 場景提取 480px 縮圖到 `thumbs_qwen/`。HEIC 直接從原檔提取。
-
-```bash
-mkdir -p "ANS_1/thumbs_qwen"
-for scene_file in "ANS_1/siglip_scenes"/*.mp4; do
-  base=$(basename "$scene_file" .mp4)
-  ffmpeg -y -ss 1 -i "$scene_file" -vframes 1 -vf "scale=-1:480" \
-    "ANS_1/thumbs_qwen/${base}.jpg" 2>/dev/null
-done
-
-# HEIC: convert to 480px jpg thumbnail
-for scene in ... # iterate manifest.json entries with type=image
-  # extract thumbnail from HEIC using sips or ffmpeg
-done
-```
+對每個 video 場景提取 480px 縮圖到 `temp/thumbs/`。HEIC 直接從原檔提取。這步由 `qwen_describe.py` 自動處理，不需手動執行。
 
 ### Step 5 — 建立並執行 `qwen_describe.py`
 
 ```python
 #!/usr/bin/env python3
 """Phase 3: Visual description via Qwen2.5VL.
-Reads manifest.json, extracts thumbnails, calls ollama,
-writes qwen_desc back to manifest.json.
+Reads temp/manifest.json, extracts thumbnails to temp/thumbs/,
+calls ollama, writes qwen_desc back to temp/manifest.json.
 
 Usage: python3 qwen_describe.py <素材路徑>
 """
@@ -325,8 +324,8 @@ def get_thumbnail(manifest_entry, source_dir):
     """Get path to 480px thumbnail, creating if needed."""
     sid = manifest_entry["scene"]
     name = manifest_entry["display_name"]
-    thumbs_dir = Path(source_dir) / "thumbs_qwen"
-    thumbs_dir.mkdir(exist_ok=True)
+    thumbs_dir = Path(source_dir) / "temp" / "thumbs"
+    thumbs_dir.mkdir(parents=True, exist_ok=True)
 
     thumb_path = thumbs_dir / f"{name}.jpg"
     if thumb_path.exists():
@@ -345,7 +344,7 @@ def get_thumbnail(manifest_entry, source_dir):
                 "-vframes", "1", str(thumb_path)
             ], capture_output=True, text=True, timeout=30)
     else:
-        scene_file = Path(source_dir) / "siglip_scenes" / f"{name}.mp4"
+        scene_file = Path(source_dir) / "temp" / "scenes" / f"{name}.mp4"
         subprocess.run([
             "ffmpeg", "-y", "-ss", "1", "-i", str(scene_file),
             "-vframes", "1", "-vf", "scale=-1:480", str(thumb_path)
@@ -390,7 +389,7 @@ def main():
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir).expanduser().resolve()
-    manifest_path = source_dir / "manifest.json"
+    manifest_path = source_dir / "temp" / "manifest.json"
 
     if not manifest_path.exists():
         print(f"Error: {manifest_path} not found. Run run_scene_detect.py first.")
@@ -442,7 +441,7 @@ python3 "$SCRIPTS_DIR/qwen_describe.py" "ANS_1"
 
 ### Step 6 — 讀取 manifest.json
 
-載入 `manifest.json`，逐一檢視每個場景的資訊：
+載入 `temp/manifest.json`，逐一檢視每個場景的資訊：
 
 - `source_file` — 原始檔名（最可靠）
 - `qwen_desc` — Qwen 視覺描述（僅供參考）
@@ -489,7 +488,7 @@ python3 "$SCRIPTS_DIR/qwen_describe.py" "ANS_1"
 
 ### Step 9 — 寫回 manifest.json
 
-將所有場景的 `caption_short`（保留的）或 `"skip": true`（跳過的）寫入 `manifest.json`。
+將所有場景的 `caption_short`（保留的）或 `"skip": true`（跳過的）寫入 `temp/manifest.json`。
 
 ```python
 for item in manifest:
@@ -501,14 +500,136 @@ for item in manifest:
 
 ---
 
-## Phase 5：輸出三種格式
+## Phase 4b：edge-tts 語音合成（可選）
 
-### Step 10 — 建立並執行 `export_scripts.py`
+### Step 10 — 安裝 edge-tts
+
+```bash
+pip install edge-tts
+```
+
+### Step 11 — 建立並執行 `generate_tts.py`
+
+讀取 `temp/manifest.json` 中所有保留場景的 `caption_short`，用 edge-tts 合成 MP3 到 `temp/tts/`。
 
 ```python
 #!/usr/bin/env python3
-"""Phase 5: Export three output formats.
-Reads manifest.json (with caption_short + optional skip),
+"""Phase 4b: edge-tts TTS generation.
+Reads temp/manifest.json (with caption_short),
+generates MP3 for each scene to temp/tts/,
+writes tts_file path back to manifest.
+
+Usage: python3 generate_tts.py <素材路徑> [--voice zh-TW-YunJheNeural]
+"""
+import json, os, sys, argparse, asyncio, subprocess
+from pathlib import Path
+
+
+async def generate_tts(text, output_path, voice):
+    cmd = [
+        sys.executable, "-m", "edge_tts",
+        "--voice", voice,
+        "--text", text,
+        "--write-media", str(output_path),
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    await proc.communicate()
+    return proc.returncode == 0
+
+
+async def main():
+    parser = argparse.ArgumentParser(description="edge-tts TTS generation")
+    parser.add_argument("source_dir", help="Path to source media folder")
+    parser.add_argument("--voice", default="zh-TW-YunJheNeural",
+                        help="edge-tts voice name")
+    args = parser.parse_args()
+
+    source_dir = Path(args.source_dir).expanduser().resolve()
+    manifest_path = source_dir / "temp" / "manifest.json"
+    tts_dir = source_dir / "temp" / "tts"
+    tts_dir.mkdir(parents=True, exist_ok=True)
+
+    if not manifest_path.exists():
+        print(f"Error: {manifest_path} not found")
+        sys.exit(1)
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    active = [item for item in manifest
+              if not item.get("skip") and item.get("caption_short")]
+
+    if not active:
+        print("Error: no active scenes with captions found")
+        sys.exit(1)
+
+    # Check if all already have TTS
+    pending = [item for item in active if not item.get("tts_file")]
+
+    if not pending:
+        print("All scenes already have TTS files.")
+        sys.exit(0)
+
+    print(f"Generating TTS for {len(pending)} scenes (voice: {args.voice})...")
+
+    for i, item in enumerate(pending):
+        sid = item["scene"]
+        text = item["caption_short"]
+        out_name = f"scene_{sid:04d}.mp3"
+        out_path = tts_dir / out_name
+
+        # Get voice: check ANS_5 for gender preference
+        voice = args.voice
+
+        success = await generate_tts(text, out_path, voice)
+        if success and out_path.exists():
+            item["tts_file"] = str(out_path)
+            dur = len(text) / 4  # rough estimate
+            item["tts_duration_sec"] = round(dur, 1)
+            status = "✅"
+        else:
+            status = "⚠️"
+
+        print(f"  [{sid:04d}/{len(active)}] {status} {text} -> {out_name}", flush=True)
+
+        # Save progress every 5
+        if (i + 1) % 5 == 0 or i == len(pending) - 1:
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    print(f"\n✅ Done. {len(pending)} TTS files in {tts_dir}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**執行：**
+
+```bash
+# 男聲（預設）
+python3 "$SCRIPTS_DIR/generate_tts.py" "ANS_1" --voice zh-TW-YunJheNeural
+
+# 女聲（依問卷 ANS_5）
+python3 "$SCRIPTS_DIR/generate_tts.py" "ANS_1" --voice zh-TW-HsiaoChenNeural
+```
+
+**產出：**
+- `temp/tts/scene_0001.mp3` ~ `scene_NNNN.mp3` — 每場景旁白音檔
+- `temp/manifest.json` 更新，每個 entry 新增 `tts_file` 與 `tts_duration_sec`
+
+---
+
+## Phase 5：輸出四種格式
+
+### Step 12 — 建立並執行 `export_scripts.py`
+
+```python
+#!/usr/bin/env python3
+"""Phase 5: Export output formats.
+Reads temp/manifest.json (with caption_short + tts_file),
 calculates cumulative timing,
 outputs palmier_script.json + subtitles.srt + script_narrative.txt
 
@@ -539,7 +660,7 @@ def main():
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir).expanduser().resolve()
-    manifest_path = source_dir / "manifest.json"
+    manifest_path = source_dir / "temp" / "manifest.json"
 
     if not manifest_path.exists():
         print(f"Error: {manifest_path} not found")
@@ -599,6 +720,7 @@ def main():
             "end_frame": item["_end_frame"],
             "subtitle": item["caption_short"],
             "tts_approx_sec": item["_tts_sec"],
+            "tts_file": item.get("tts_file"),
         }
         # Remove None values
         scene_entry = {k: v for k, v in scene_entry.items() if v is not None}
@@ -671,6 +793,15 @@ if __name__ == "__main__":
 python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
 ```
 
+### Step 13 — 驗證輸出
+
+確認根目錄下有：
+- `palmier_script.json` — 含每個場景的 **tts_file** 路徑
+- `subtitles.srt` — 標準字幕
+- `script_narrative.txt` — 腳本文字
+
+確認 `temp/tts/` 下有對應的 `.mp3` 音檔。
+
 ---
 
 ## 輸出檔案一覽
@@ -679,16 +810,19 @@ python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
 
 ```
 素材資料夾/
-├── manifest.json             ← 完整場景清單（含描述與旁白）
-├── siglip_scenes/            ← 切割後的獨立場景 MP4
-├── thumbs_qwen/              ← 480px 縮圖（視覺描述用）
-├── scripts/                  ← Python 腳本
-│   ├── run_scene_detect.py
-│   ├── qwen_describe.py
-│   └── export_scripts.py
-├── palmier_script.json       ← → 給 Palmier Pro MCP
+├── palmier_script.json       ← → 給 Palmier Pro MCP（含 tts_file 路徑）
 ├── subtitles.srt              ← → 字幕檔
-└── script_narrative.txt      ← → 給人看的腳本
+├── script_narrative.txt      ← → 給人看的腳本
+└── temp/                     ← 暫存檔（可清空）
+    ├── manifest.json         ← 完整場景清單（含描述、旁白、TTS）
+    ├── scripts/
+    │   ├── run_scene_detect.py
+    │   ├── qwen_describe.py
+    │   ├── generate_tts.py
+    │   └── export_scripts.py
+    ├── scenes/               ← 切割後的獨立場景 MP4
+    ├── thumbs/               ← 480px 縮圖（視覺描述用）
+    └── tts/                  ← edge-tts 旁白音檔 MP3
 ```
 
 ## Palmier Script JSON 規格
@@ -709,7 +843,8 @@ python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
   "start_frame": 0,
   "end_frame": 150,
   "subtitle": "走～來看看日航貴賓室長怎樣",
-  "tts_approx_sec": 2.5
+  "tts_approx_sec": 2.5,
+  "tts_file": "/path/to/temp/tts/scene_0001.mp3"
 }
 ```
 
@@ -731,7 +866,7 @@ python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
 # 3. 累積 startFrame 依序上片
 ```
 
-### `add_texts` 對應
+### `add_texts` + TTS 音檔
 
 ```python
 # 上完所有 clip 後，一次 add_texts 上字幕
@@ -749,6 +884,17 @@ add_texts(entries=[{
         "centerY": 0.85
     }
 } for item in script.scenes])
+
+# 如有 TTS 音檔，匯入並上旁白音軌
+for item in script.scenes:
+    if item.get("tts_file"):
+        import_media(source={path: item.tts_file})
+        add_clips(entries=[{
+            "mediaRef": ref_of_tts,
+            "startFrame": item.start_frame,
+            "endFrame": item.end_frame,
+            "trackIndex": audio_track_index
+        }])
 ```
 
 ## MCP 工具速查（Palmier 側）
@@ -774,3 +920,4 @@ add_texts(entries=[{
 | 4 | **旁白每句控制 15-20 字** | 太長的旁白在 5 秒場景內唸不完 |
 | 5 | **HEIC 照片直接給 Palmier 處理** | 不需預轉 JPG，Palmier 原生支援 |
 | 6 | **先 remove_silence 再放 BGM** | silence 的 ripple 會切裂已定位的 BGM track |
+| 7 | **TTS 音檔在 Palmier 側上旁白軌** | edge-tts 產生的 MP3 經 `import_media` 匯入後，用 `add_clips` 放到獨立的旁白音軌，不要混入原始素材音軌 |
