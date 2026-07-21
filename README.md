@@ -78,7 +78,7 @@ pip install bluemagpie-tts soundfile
 - **旁白檢查點**：Phase 4 完成後暫停，輸出旁白表供使用者確認修改
 - **音檔 loudnorm 統一音量**：所有 TTS 正規化至 -16 LUFS
 - **TTS 淡入 0.5s**：每段旁白開頭平滑切入
-- **台灣藍鵲 TTS + 自訂聲音向量**：支援 `my_voice.pt`
+- **台灣藍鵲 TTS + 自訂聲音向量**：支援 `my_voice.pt`（產生方式：`pip install -e ".[clone]"` 後執行 `scripts/extract_speaker_centroid.py`，詳見 [BlueMagpie-TTS#指定語者](https://github.com/OpenFormosa/BlueMagpie-TTS#指定語者以語者向量控制音色)）
 - **Palmier Pro 自動剪輯**：直接透過 MCP 建立專案、上片、上字幕、上音軌、輸出 MP4
 - **TTS / BGM 分軌**：TTS 放 A1，BGM 放 A2（vol 0.08 + 淡入淡出）
 
