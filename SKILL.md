@@ -2,7 +2,7 @@
 name: palmier-autocut-scene-tts
 description: >
   Scene-based 剪片流程：ffmpeg 場景偵測 → Qwen2.5VL 視覺描述 →
-  opencode 旁白撰寫 → edge-tts 語音合成 →
+  opencode 旁白撰寫 → Edge TTS / 台灣藍鵲 TTS 語音合成 →
   輸出 Palmier Script JSON + SRT + 腳本文字檔 + TTS 音檔。
   適用於旅遊、開箱、活動記錄等場景式素材。不需使用者具備技術知識。
   Trigger keywords: 幫我切場景剪片, 切場景剪片, 場景剪輯, 剪片, scene editing,
@@ -23,6 +23,7 @@ description: >
 | 6 | **暫存檔全進 `temp/`** | 場景影片、縮圖、腳本、manifest 都放在 `temp/` 下，素材根目錄只留原始檔與最終產出 |
 | 7 | **最終產出四種格式** | `palmier_script.json`（給 MCP）+ `subtitles.srt`（字幕）+ `script_narrative.txt`（給人看的腳本）+ `temp/tts/*.mp3`（旁白音檔） |
 | 8 | **步驟失敗 → retry 一次，再失敗則告知使用者** | 不要靜靜卡住或假設成功 |
+| 9 | **TTS 音檔全部 loudnorm 統一音量** | 不同 TTS 片段之間音量可能不一致，用 `ffmpeg -af loudnorm=I=-16:LRA=1:TP=-1` 對所有 WAV/MP3 做 EBU R128 正規化 |
 
 ## 預設值
 
@@ -30,40 +31,70 @@ description: >
 |:----:|:-------:|:------:|
 | 解析度 | 1920×1080, 30fps | 否 |
 | 場景偵測門檻 | `scene,0.15` | 否 |
-| 場景長度 (MP4) | 5 秒 | 問卷 ANS_3 |
-| 場景長度 (HEIC) | 等長於旁白語音 (~4s) | 否 |
+| 場景長度 (MP4) | 3~5 秒（依場景動態） | 問卷 ANS_2 |
+| 場景長度 (HEIC/圖片) | **固定 4 秒** | 否 |
 | 旁白每句長度 | 15-20 字 | 否 |
 | 旁白語言 | 正體中文 | 否 |
 | 視覺模型 | `qwen2.5vl:7b` | 否 |
 | Ollama API | `http://127.0.0.1:11434/api/generate` | 否 |
-| TTS 引擎 | edge-tts | 否 |
-| TTS 語音 | `zh-TW-YunJheNeural`（男聲） | 問卷 ANS_5 |
-| BGM 風格 | 視 ANS_6（`不需要` / `輕鬆` / `活潑` / `寧靜` / 自訂） | 問卷 ANS_6 |
+| TTS 引擎 | Edge TTS / 台灣藍鵲 TTS | 問卷 ANS_4 |
+| Edge TTS 語音 | `zh-TW-YunJheNeural`（男聲） | 問卷 ANS_4a |
+| 台灣藍鵲 TTS 聲音 | 李宏毅老師 / 通用女聲 / 自己的聲音 | 問卷 ANS_4b |
+| BGM 風格 | 視 ANS_5（`不需要` / `輕鬆` / `活潑` / `寧靜` / 自訂） | 問卷 ANS_5 |
 | BGM 來源 | Pixabay Music（CC0 免費授權） | 否 |
 | 暫存目錄 | `temp/`（素材根目錄下） | 否 |
+| 字幕字體大小 | 48（canvas points） | 否 |
+| 字幕位置 | 螢幕中間下方（centerX: 0.5, centerY: 0.85） | 否 |
+| 字幕顏色 | 白字 `#FFFFFF`，無背景 | 否 |
 
 ## Phase 1：互動問卷
 
-依序詢問，答案記錄為 `ANS_X`：
+依序詢問，答案記錄為 `ANS_X`。後續問題取決於前一個答案。
 
-| 代號 | 問題 | 預設值 |
-|:----:|:-----|:------:|
-| ANS_1 | **素材資料夾路徑？**（例如 `~/Desktop/日航商務艙初體驗/`） | `~/Desktop/` |
-| ANS_2 | **跳過的檔案？**（多檔以逗號分隔，例如 `商務艙開箱_1.MP4,IMG_001.MOV`；留空則全部採用） | 空 |
-| ANS_3 | **每個場景固定秒數？** | `5` |
-| ANS_4 | **旁白口吻偏好？**（輕鬆 / 活潑 / 簡潔） | `輕鬆` |
-| ANS_5 | **TTS 語音？**（`男聲` / `女聲`） | `男聲` |
-| ANS_6 | **背景音樂風格？**（`不需要` / `輕鬆` / `活潑` / `寧靜` / `自訂描述`） | `不需要` |
+```
+ANS_1  素材資料夾路徑？
+        資料夾名稱建議符合影片主題
+        範例: ~/Desktop/日航商務艙初體驗/
+        預設: ~/Desktop/影片主題資料夾
+
+ANS_2  最大場景秒數？（3~5s 動態，最小值固定 3）
+        預設: 5
+
+ANS_3  旁白口吻偏好？（輕鬆 / 活潑 / 通俗幽默 / 簡潔）
+       預設: 輕鬆通俗幽默
+
+ANS_4  TTS 引擎？（Edge TTS / 台灣藍鵲 TTS）
+       預設: Edge TTS
+
+       if ANS_4 == "Edge TTS":
+         ANS_4a  語音性別？（男聲 / 女聲）
+                 預設: 男聲
+                 男聲 → edge-tts voice: zh-TW-YunJheNeural
+                 女聲 → edge-tts voice: zh-TW-HsiaoChenNeural
+
+       if ANS_4 == "台灣藍鵲 TTS":
+         ANS_4b  聲音選擇？（李宏毅老師 / 通用女聲 / 自己的聲音）
+                 預設: 李宏毅老師
+
+         if ANS_4b == "自己的聲音":
+           ANS_4c  聲音向量 .pt 路徑？
+                   預設: ~/Desktop/剪片ing/自己的聲音向量/my_voice.pt
+
+ANS_5  背景音樂風格？（不需要 / 輕鬆 / 活潑 / 寧靜 / 自訂描述）
+       預設: 輕鬆
+```
 
 問完後格式化輸出給使用者確認，再開始執行。
 
 ```
 === 確認資訊 ===
 素材路徑: ~/Desktop/日航商務艙初體驗/
-跳過檔案: 商務艙開箱_1.MP4
-場景秒數: 5
+場景秒數: 3~5 (動態)
 旁白風格: 輕鬆
-TTS 語音: 男聲
+TTS 引擎: Edge TTS
+  └ 語音性別: 男聲                # Edge TTS 時顯示
+  └ 聲音選擇: 李宏毅老師           # 台灣藍鵲 TTS 時顯示
+  └ 聲音向量: .../my_voice.pt     # 自己的聲音時才顯示
 BGM 風格: 輕鬆
 ================
 正確嗎？（回答 y / n）
@@ -88,22 +119,16 @@ mkdir -p SCRIPTS_DIR TEMP_DIR/scenes TEMP_DIR/thumbs TEMP_DIR/tts TEMP_DIR/bgm
 ```python
 #!/usr/bin/env python3
 """Phase 2: Scene detection + clip extraction.
-Scans ANS_1 for MP4/MOV/HEIC files, runs ffmpeg scene detection,
-extracts clips, writes temp/manifest.json.
+ffmpeg scene detect at 0.15 → merge <1s segments → one 3~6s clip per segment.
+Images: fixed max_duration.
 
-Usage: python3 run_scene_detect.py <素材路徑> [--skip 檔名,檔名] [--duration 秒]
-
-Args:
-    素材路徑: Source folder path
-    --skip: Comma-separated filenames to skip
-    --duration: Clip duration in seconds (default 5)
+Usage: python3 run_scene_detect.py <素材路徑> [--skip 檔名,檔名] [--max-duration 秒]
 """
-import json, os, subprocess, sys, re, argparse
+import json, subprocess, sys, re, argparse
 from pathlib import Path
 
 
 def natural_sort_key(s):
-    """Sort by numeric prefix then string."""
     m = re.match(r'(\d+)', s)
     return (int(m.group(1)) if m else 999, s)
 
@@ -121,7 +146,7 @@ def main():
     parser = argparse.ArgumentParser(description="Scene detection & clip extraction")
     parser.add_argument("source_dir", help="Path to source media folder")
     parser.add_argument("--skip", default="", help="Comma-separated filenames to skip")
-    parser.add_argument("--duration", type=int, default=5, help="Clip duration in seconds")
+    parser.add_argument("--max-duration", type=int, default=6, help="Max clip duration in seconds (default 6)")
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir).expanduser().resolve()
@@ -131,7 +156,6 @@ def main():
 
     skip_list = [s.strip() for s in args.skip.split(",") if s.strip()]
 
-    # Collect files
     all_files = []
     for ext in (".MP4", ".mp4", ".MOV", ".mov", ".HEIC", ".heic"):
         for f in sorted(source_dir.glob(f"*{ext}")):
@@ -142,144 +166,152 @@ def main():
         print("No media files found!")
         sys.exit(1)
 
-    # Sort by numeric prefix
     all_files.sort(key=lambda f: natural_sort_key(f.stem))
 
     manifest = []
     scene_idx = 0
+    fps = 30
+    min_dur = 3
+    max_dur = args.max_duration
+    merge_threshold = 1.0  # merge segments shorter than this
 
     for filepath in all_files:
         ext = filepath.suffix.upper()
         stem = filepath.stem
+        full_stem = re.sub(r'[^\w\s-]', '', stem).replace(' ', '_') or stem
         print(f"\n{'='*60}")
         print(f"Processing: {filepath.name}")
 
+        source_dur = get_media_duration(filepath)
+
         if ext in (".HEIC", ".HEIF"):
-            # Still image: record as single scene
             scene_idx += 1
-            scene_name = f"scene_{scene_idx:04d}_{stem}"
+            scene_name = f"scene_{scene_idx:04d}_{full_stem}"
             entry = {
                 "scene": scene_idx,
                 "source_file": filepath.name,
+                "source_duration": round(source_dur, 1),
                 "type": "image",
                 "source_path": str(filepath),
                 "display_name": scene_name,
-                "duration": args.duration,
+                "duration": 4.0,  # images fixed at 4s
                 "has_audio": False,
             }
             manifest.append(entry)
-            print(f"  [{scene_idx:04d}] 📷 {filepath.name} ({args.duration}s)")
+            print(f"  [{scene_idx:04d}] 📷 {filepath.name} ({max_dur}s)")
             continue
 
-        # Video: run ffmpeg scene detection
-        scene_file_escaped = str(scenes_dir / f"scene_%04d_{stem}.mp4")
-
-        # First pass: detect scene changes
-        detect_args = [
+        # ffmpeg scene detection at 0.15
+        r = subprocess.run([
             "ffmpeg", "-i", str(filepath),
-            "-vf", f"select='gt(scene,0.15)',setpts=N/FRAME_RATE/TB",
-            "-vsync", "vfr",
-            "-an",
-            "-f", "null",
-            "-"
-        ]
-        result = subprocess.run(detect_args, capture_output=True, text=True, timeout=300)
-        stderr = result.stderr
+            "-vf", "select='gt(scene,0.15)',showinfo",
+            "-vsync", "vfr", "-an", "-f", "null", "-"
+        ], capture_output=True, text=True, timeout=300)
+        stderr = r.stderr
 
-        # Parse scene change frames from output
-        scene_frames = [0]
+        # Parse scene change pts_times
+        change_pts = []
         for line in stderr.split("\n"):
-            m = re.search(r"Parsed_select_0.*n:\s*(\d+)", line)
+            m = re.search(r"pts_time:([\d.]+)", line)
             if m:
-                frame = int(m.group(1))
-                if frame > scene_frames[-1]:
-                    scene_frames.append(frame)
+                t = float(m.group(1))
+                if t > 0.1:
+                    change_pts.append(t)
 
-        if len(scene_frames) < 2:
-            # No scene change detected, use whole video
-            dur = get_media_duration(filepath)
+        # Build segments [start, end) from change points
+        raw_segments = []
+        prev = 0.0
+        for t in change_pts:
+            raw_segments.append((prev, t))
+            prev = t
+        raw_segments.append((prev, source_dur))
+
+        # Merge segments shorter than merge_threshold — repeat until stable
+        merged = list(raw_segments)
+        changed = True
+        while changed:
+            changed = False
+            i = 0
+            while i < len(merged):
+                s, e = merged[i]
+                if e - s >= merge_threshold:
+                    i += 1
+                    continue
+                if i + 1 < len(merged):
+                    merged[i] = (s, merged[i + 1][1])
+                    merged.pop(i + 1)
+                    changed = True
+                elif i > 0:
+                    merged[i - 1] = (merged[i - 1][0], e)
+                    merged.pop(i)
+                    changed = True
+                    i -= 1
+                else:
+                    i += 1
+
+        # If only 1 segment after merge → whole file = one scene
+        if len(merged) <= 1:
+            clip_dur = min(max(source_dur, min_dur), max_dur)
             scene_idx += 1
-            scene_name = f"scene_{scene_idx:04d}_{stem}"
+            scene_name = f"scene_{scene_idx:04d}_{full_stem}"
             out_file = scenes_dir / f"{scene_name}.mp4"
-
-            target_dur = min(args.duration, dur)
             subprocess.run([
-                "ffmpeg", "-y", "-ss", "0",
-                "-i", str(filepath),
-                "-t", str(target_dur),
-                "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
+                "ffmpeg", "-y", "-ss", "0", "-i", str(filepath),
+                "-t", f"{clip_dur:.2f}",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
                 str(out_file)
             ], capture_output=True, text=True, timeout=60)
-
             entry = {
-                "scene": scene_idx,
-                "source_file": filepath.name,
-                "type": "video",
-                "source_path": str(filepath),
-                "display_name": scene_name,
-                "source_start": 0.0,
-                "source_end": target_dur,
-                "duration": target_dur,
-                "has_audio": True,
+                "scene": scene_idx, "source_file": filepath.name,
+                "source_duration": round(source_dur, 1), "type": "video",
+                "source_path": str(filepath), "display_name": scene_name,
+                "source_start": 0.0, "source_end": clip_dur,
+                "duration": clip_dur, "has_audio": True,
             }
             manifest.append(entry)
-            print(f"  [{scene_idx:04d}] 🎬 {filepath.name} (no cuts, {target_dur:.1f}s)")
+            print(f"  [{scene_idx:04d}] 🎬 {filepath.name}  [0-{clip_dur:.1f}s] {clip_dur:.1f}s (1 scene)")
             continue
 
-        # Extract each scene as a clip
-        total_dur = get_media_duration(filepath)
-        fps = 30  # assume 30fps
-
-        for si in range(len(scene_frames)):
-            start_frame = scene_frames[si]
-            end_frame = scene_frames[si + 1] if si + 1 < len(scene_frames) else int(total_dur * fps)
-
-            start_sec = start_frame / fps
-            # Clip length: min(args.duration, segment_length)
-            seg_len = (end_frame - start_frame) / fps
-            clip_dur = min(args.duration, seg_len)
-
-            if clip_dur < 0.5:
-                continue  # skip too-short segments
+        # Extract one 3~6s clip from each merged segment (centered)
+        for s, e in merged:
+            seg_len = e - s
+            clip_dur = min(max(seg_len, min_dur), max_dur)
+            if seg_len > clip_dur:
+                offset = (seg_len - clip_dur) / 2
+                start_sec = s + offset
+            else:
+                start_sec = s
 
             scene_idx += 1
-            scene_name = f"scene_{scene_idx:04d}_{stem}"
+            scene_name = f"scene_{scene_idx:04d}_{full_stem}"
             out_file = scenes_dir / f"{scene_name}.mp4"
-
             subprocess.run([
                 "ffmpeg", "-y",
-                "-ss", f"{start_sec:.3f}",
-                "-i", str(filepath),
+                "-ss", f"{start_sec:.3f}", "-i", str(filepath),
                 "-t", f"{clip_dur:.2f}",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
                 str(out_file)
             ], capture_output=True, text=True, timeout=60)
 
             entry = {
-                "scene": scene_idx,
-                "source_file": filepath.name,
-                "type": "video",
-                "source_path": str(filepath),
-                "display_name": scene_name,
+                "scene": scene_idx, "source_file": filepath.name,
+                "source_duration": round(source_dur, 1), "type": "video",
+                "source_path": str(filepath), "display_name": scene_name,
                 "source_start": round(start_sec, 2),
                 "source_end": round(start_sec + clip_dur, 2),
-                "duration": round(clip_dur, 2),
-                "has_audio": True,
+                "duration": round(clip_dur, 2), "has_audio": True,
             }
             manifest.append(entry)
-            print(f"  [{scene_idx:04d}] 🎬 {filepath.name}  [{start_sec:.1f}s-{start_sec+clip_dur:.1f}s] {clip_dur:.1f}s")
+            print(f"  [{scene_idx:04d}] 🎬 {filepath.name}  [{start_sec:.1f}-{start_sec+clip_dur:.1f}s] {clip_dur:.1f}s  (seg={seg_len:.1f}s)")
 
-    # Write manifest
     manifest_path = temp_dir / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
+    total_time = sum(s.get("duration", 0) for s in manifest)
     print(f"\n{'='*60}")
-    print(f"✅ Done! {len(manifest)} scenes extracted")
-    print(f"📄 Manifest: {manifest_path}")
-    print(f"📁 Scenes: {scenes_dir}")
+    print(f"✅ {len(manifest)} scenes, {total_time:.1f}s total")
+    print(f"📄 {manifest_path}")
 
 
 if __name__ == "__main__":
@@ -290,8 +322,7 @@ if __name__ == "__main__":
 
 ```bash
 python3 "$SCRIPTS_DIR/run_scene_detect.py" "ANS_1" \
-  ${ANS_2:+--skip "$ANS_2"} \
-  --duration ANS_3
+  --max-duration ANS_2
 ```
 
 **產出：**
@@ -441,54 +472,82 @@ python3 "$SCRIPTS_DIR/qwen_describe.py" "ANS_1"
 
 ---
 
-## Phase 4：場景篩選與旁白撰寫（opencode 負責）
+## Phase 3b：場景過濾（opencode 負責）
 
-### Step 6 — 讀取 manifest.json
+### Step 6 — 以 Qwen 描述為基礎過濾場景
 
-載入 `temp/manifest.json`，逐一檢視每個場景的資訊：
+載入 `temp/manifest.json`，逐一檢視每個場景的 `qwen_desc`。
 
-- `source_file` — 原始檔名（最可靠）
-- `qwen_desc` — Qwen 視覺描述（僅供參考）
-- `type` — `video` 或 `image`
-- `duration` — 場景長度
+**過濾規則（依優先順序）：**
 
-### Step 7 — 依照篩選規則決定保留或跳過
+| # | 條件 | 處理 |
+|:-:|:-----|:-----|
+| 1 | `qwen_desc` 包含明顯的模糊/無法辨識關鍵字（「模糊」、「無法辨識」、「黑色背景」、「布料」等） | ✗ **晃動雜訊** → 跳過 |
+| 2 | 同一個 `source_file` 有大量子場景（如手機錄影連拍 App 畫面），且 `qwen_desc` 內容高度重複 | ✗ **內容重複** → 只留開頭、中間、結尾各一，其餘跳過。App 螢幕錄影一類留 3-5 段足矣 |
+| 3 | 畫面明顯與主線主題無關（拍到地板、褲子、鏡頭蓋、走道晃動） | ✗ **無關畫面** → 跳過 |
+| 4 | `qwen_desc` 與 `source_file` 明顯矛盾（檔名「點餐櫃檯」但描述說「展覽館門口」） | → 以 `source_file` 為準，忽略 `qwen_desc`。若仍無法判斷則跳過 |
+| 5 | 其他情況 | ✅ **保留** |
 
-| 條件 | 處理 |
-|:-----|:-----|
-| `qwen_desc` 與 `source_file` 明顯不符（例如「展覽館門口」vs 檔名「點餐櫃檯」） | ✗ **視覺描述誤判** → 忽略 `qwen_desc`。以 `source_file` 為主改寫旁白。若 `source_file` 也無法判斷則跳過 |
-| `qwen_desc` 內容模糊無意義（「模糊的黃色布料」、「黑色的背景」） | ✗ **無法辨識** → 跳過該場景 |
-| 同一個 `source_file` 有多個子場景，且內容高度重複（如同支手機錄影連續拍 App 畫面） | ✗ **內容重複** → 只保留最具代表性的 2-3 段，其餘跳過。保留規則：開頭、中間、結尾各一 |
-| 畫面與主線主題無關（拍到地板、晃動模糊、鏡頭蓋） | ✗ **無關畫面** → 跳過 |
-| 其他情況 | ✅ **保留**。以 `source_file` 為準撰寫旁白 |
+**實作方式：** 在 `temp/manifest.json` 中被跳過的場景加上 `"skip": true`。
+
+```python
+skip_scenes = set()
+# 依上述規則決定要跳過的 scene 編號
+for item in manifest:
+    if item["scene"] in skip_scenes:
+        item["skip"] = True
+```
+
+---
+
+## Phase 4：旁白撰寫（opencode 負責）
+
+### Step 7 — 載入過濾後的 manifest
+
+讀取 `temp/manifest.json`，只處理沒有 `skip` 標記的場景。
 
 ### Step 8 — 撰寫旁白
 
-為每個「保留」的場景寫一句旁白，寫入 `caption_short` 欄位。
+為每個保留場景寫一句旁白，寫入 `caption_short` 欄位。
 
-**寫作原則：**
+**核心要求：輕鬆、通俗、幽默。像在跟朋友邊看影片邊聊天，不是寫字幕標題。讓人看了會笑、覺得親切，不是讀說明書。**
 
-- **輕鬆口語**，像在跟朋友聊天
-  - 不要「我看到」、「我發現」、「映入眼簾」
-  - 可以用「哇」、「耶」、「來～」、「～耶」、「～喔」等口語語氣詞
-  - 參考口吻：`「走～來看看貴賓室長怎樣」`、`「冰箱裡直接擺兩瓶酒，誠意滿滿」`
-- **善用檔名梗**：如果檔名有趣（「躺著就到貴賓室的貴賓」），可以玩文字遊戲
-- **每句 15-20 字**，不超過 25 字
-- **前後連貫**：相鄰場景的旁白之間保有主題的延續性
-- **風格統一**：整份旁白的口吻要一致
+**兩大資訊來源（都要看，互補）：**
+| 來源 | 給你什麼 | 範例 |
+|:-----|:---------|:------|
+| **Qwen `qwen_desc`** | 畫面上實際有什麼（物體、場景、人物、文字） | 「窗外有停機坪」、「桌上有咖哩飯」、「手機畫面顯示 JAL App」 |
+| **檔案名稱** | 拍攝者原本想記錄什麼（context、人物名、地點、趣味雙關） | 「躺著就到貴賓室的貴賓」、「芸希躺平」、「甜點有哈根達斯」 |
 
-**語氣範例表：**
+寫法：Qwen 告訴你畫面內容，檔名告訴你怎麼解讀它。例如 Qwen 說「小孩躺在椅子上」，檔名說「芸希躺平」→ 寫「女兒已經躺平在玩了」；Qwen 說「桌上有一個冰淇淋」，檔名說「甜點有哈根達斯」→ 寫「甜點是哈根達斯」。
 
-| 原始檔名 | 場景類型 | 輕鬆口吻範例 |
-|:---------|:--------:|:-------------|
-| `0_0貴賓室位置` | 影片 | 走～來看看日航貴賓室長怎樣 |
-| `3_0貴賓室view_2` | 影片 | 陽光灑進來，整間餐廳都亮了 |
-| `9_0貴賓室餐點線上預約` | 影片 | 拿起手機打開 JAL App，準備點餐 |
-| `9_1咖哩飯.HEIC` | 照片 | 咖哩飯上桌，光看就餓了 |
-| `11_0商務艙簡易開箱` | 影片 | 這螢幕也太大了吧，比我家電視還大 |
-| `13_1芸希躺平.HEIC` | 照片 | 女兒已經躺平在玩了，上面還有小飛機 |
-| `18_和式飛機餐.HEIC` | 照片 | 和食便當超精緻，每道都像樣品 |
-| `22_到台灣囉.HEIC` | 照片 | 吃飽睡飽，睜開眼就到台灣了 |
+**鐵則（照優先順序，每條都強制考慮 Qwen + 檔名兩個來源）：**
+
+| # | 規則 | 雙重來源：Qwen 描述 ⨯ 檔名 |
+|:-:|:-----|:---------------------------|
+| 1 | **用 Qwen 描述的具體視覺細節 + 檔名資訊來寫**。Qwen 說有停機坪 → 寫「窗外就是停機坪」；檔名有「躺著就到貴賓室的貴賓」→ 寫「女兒躺著就到貴賓室」。**兩個來源都要看**，不能只看一邊 | |
+| 2 | **寫完整一句話，不是標題**。要有主體 + 動作/描述 +（可選）humor punchline。不要低於 12 字。問自己：這句話拿掉畫面還能不能聽懂在講什麼？→ 不行就太短 | |
+| 3 | **每句 15-25 字**，不要低於 12 字（太短像標題，沒畫面感）。寧可長一點有細節，也不要短到像字幕機跑馬燈 | |
+| 4 | **嵌入具體名稱**：從 Qwen 擷取（Sakura Lounge、JAL、哈根達斯、停機坪、SkySuite）+ 從檔名擷取（芸希、咖哩飯、眼罩）。讓旁白有獨特性，不是套版。反面：如果旁白換到其他影片也能用 → 太抽象，重寫 | |
+| 5 | **前後連貫像在講故事**。相鄰場景的旁白之間保有主題延續性。寫完後讀一遍，確認有「走進貴賓室 → 繞一圈 → 看窗外 → 坐下來吃」的敘事流，不是跳躍式 | |
+| 6 | **輕鬆通俗幽默**。善用檔名玩梗（「躺著就到貴賓室的貴賓」→ 真不愧是貴賓）。用一般人會說的講法，不用書面語。問自己：這句拿去跟朋友聊天會很奇怪嗎？→ 怪就重寫 | |
+
+**禁止詞：** 「我看到」、「我發現」、「映入眼簾」、「這裡有」、「這個是」
+
+**語氣範例表（加強版，每句都有具體細節）：**
+
+| 原始檔名 | 旁白範例 | 關鍵細節來源 |
+|:---------|:---------|:-------------|
+| `0_0貴賓室位置` | 走～來看看日航貴賓室在哪 | 檔名 hint |
+| `0_1躺著就到貴賓室的貴賓` | 女兒躺著就到貴賓室，真不愧是貴賓 | 檔名梗 + 人物 |
+| `1_進入貴賓室` | 一進 Sakura Lounge，氣氛就不一樣 | Qwen 描述 lounge 內部 |
+| `3_0貴賓室view_2` | 窗外就是停機坪，陽光灑進來好美 | Qwen 看到停機坪 + 陽光 |
+| `3_1貴賓室樓下view1` | 樓下座位區也好舒服，view 很讚 | Qwen 描述座位區 |
+| `9_0貴賓室餐點線上預約` | 拿起手機打開 JAL App，準備點餐 | Qwen 看到手機畫面 |
+| `9_1咖哩飯.HEIC` | 咖哩飯上桌，光看就餓了 | Qwen 看到咖哩飯照片 |
+| `11_0商務艙簡易開箱` | 這螢幕也太大了吧，比我家電視還大 | Qwen 看到大螢幕 |
+| `13_1芸希躺平.HEIC` | 女兒已經躺平在玩了，上面還有小飛機 | Qwen 看到人物 + 座椅 |
+| `18_和式飛機餐.HEIC` | 和食便當超精緻，每道都像樣品 | Qwen 看到便當細節 |
+| `22_到台灣囉.HEIC` | 吃飽睡飽，睜開眼就到台灣了 | 結尾場景 + 檔名梗 |
 
 ### Step 9 — 寫回 manifest.json
 
@@ -496,40 +555,72 @@ python3 "$SCRIPTS_DIR/qwen_describe.py" "ANS_1"
 
 ```python
 for item in manifest:
-    if scene_should_skip(item):
-        item["skip"] = True
-    else:
-        item["caption_short"] = "寫好的旁白"
+    if item.get("skip"):
+        continue
+    item["caption_short"] = "寫好的旁白"
 ```
+
+### Step 9b — ✋ 使用確認：讓使用者檢查旁白
+
+所有旁白寫入 manifest 後，**暫停管線**，輸出旁白表給使用者確認：
+
+```
+=== 旁白檢查表 ===
+序號 │ 來源檔名            │ 秒數  │ 旁白
+─────┼─────────────────────┼───────┼──────────────────────────
+001  │ 0_0貴賓室位置       │  4.0  │ 走～來看看日航貴賓室在哪
+002  │ 0_1躺著就到貴賓室的貴賓│ 4.0  │ 女兒躺著就到貴賓室...
+...
+共 N 段旁白，請確認。
+
+要繼續生成 TTS 嗎？（y / n）
+n → 讓使用者手動編輯 manifest.json 中的 caption_short，編輯完成後回答 y 繼續
+```
+
+使用者回答 `y` 才繼續 Phase 4b。回答 `n` 時停下來等使用者手動修改，他們自己說 OK 後再繼續。
 
 ---
 
-## Phase 4b：edge-tts 語音合成（可選）
+## Phase 4b：語音合成（可選）
 
-### Step 10 — 安裝 edge-tts
+### Step 10 — 安裝依賴
 
 ```bash
+# Edge TTS（選用 Edge TTS 引擎時需要）
 pip install edge-tts
+
+# 台灣藍鵲 TTS（選用台灣藍鵲 TTS 引擎時需要）
+pip install bluemagpie-tts soundfile
+# 首次執行會自動下載 ~2GB 模型權重，請確保網路穩定
 ```
 
 ### Step 11 — 建立並執行 `generate_tts.py`
 
-讀取 `temp/manifest.json` 中所有保留場景的 `caption_short`，用 edge-tts 合成 MP3 到 `temp/tts/`。
+讀取 `temp/manifest.json` 中所有保留場景的 `caption_short`，依 ANS_4 選擇的 TTS 引擎合成音檔到 `temp/tts/`。
 
 ```python
 #!/usr/bin/env python3
-"""Phase 4b: edge-tts TTS generation.
+"""Phase 4b: TTS generation (Edge TTS / 台灣藍鵲 TTS).
 Reads temp/manifest.json (with caption_short),
-generates MP3 for each scene to temp/tts/,
+generates audio for each scene to temp/tts/,
 writes tts_file path back to manifest.
 
-Usage: python3 generate_tts.py <素材路徑> [--voice zh-TW-YunJheNeural]
+Usage:
+  # Edge TTS
+  python3 generate_tts.py <素材路徑> --tts-engine edge --voice zh-TW-YunJheNeural
+
+  # 台灣藍鵲 TTS
+  python3 generate_tts.py <素材路徑> --tts-engine bluemagpie --speaker hung_yi_lee
+  python3 generate_tts.py <素材路徑> --tts-engine bluemagpie --speaker female_voice
+  python3 generate_tts.py <素材路徑> --tts-engine bluemagpie --speaker custom --centroid-path /path/to/voice.pt
 """
-import json, os, sys, argparse, asyncio, subprocess
+import json, os, sys, argparse, asyncio, subprocess, warnings
 from pathlib import Path
 
-
-async def generate_tts(text, output_path, voice):
+# ------------------------------------------------------------------ #
+# Edge TTS
+# ------------------------------------------------------------------ #
+async def generate_edge_tts(text, output_path, voice):
     cmd = [
         sys.executable, "-m", "edge_tts",
         "--voice", voice,
@@ -543,11 +634,106 @@ async def generate_tts(text, output_path, voice):
     return proc.returncode == 0
 
 
+# ------------------------------------------------------------------ #
+# BlueMagpie-TTS
+# ------------------------------------------------------------------ #
+_BLUEMAGPIE_MODEL = None
+
+
+def _load_bluemagpie():
+    global _BLUEMAGPIE_MODEL
+    if _BLUEMAGPIE_MODEL is not None:
+        return _BLUEMAGPIE_MODEL
+
+    print("  Loading BlueMagpie-TTS (~20s first time, then cached)...", file=sys.stderr)
+    warnings.filterwarnings("ignore", message=".*weight_norm.*")
+    import torch
+    from transformers import PreTrainedTokenizerFast
+    from bluemagpie import BlueMagpieModel
+
+    model_dir = os.path.expanduser(
+        "~/.cache/huggingface/hub/models--OpenFormosa--BlueMagpie-TTS/"
+        "snapshots/aaf1a0878e37875382bb0e5c8a3a2ba43be67297"
+    )
+    tokenizer = PreTrainedTokenizerFast(tokenizer_file=os.path.join(model_dir, "tokenizer.json"))
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    model = BlueMagpieModel.from_local(model_dir, tokenizer=tokenizer, training=False, device=device)
+    _BLUEMAGPIE_MODEL = model
+    return model
+
+
+def generate_bluemagpie_tts(text, output_path, speaker, centroid_path):
+    import torch
+    import soundfile as sf
+
+    model = _load_bluemagpie()
+    sr = model.sample_rate
+
+    # Determine speaker centroid
+    centroid = None
+    if speaker == "custom":
+        if centroid_path and os.path.isfile(centroid_path):
+            centroid = torch.load(centroid_path, weights_only=True)
+        else:
+            print(f"  Warning: .pt not found at {centroid_path}, fallback to hung_yi_lee",
+                  file=sys.stderr)
+            speaker = "hung_yi_lee"
+
+    # Append 句號 for natural ending
+    text_clean = text.strip()
+    if text_clean and text_clean[-1] not in ".。!！?？":
+        text_clean += "。"
+
+    torch.manual_seed(42)
+    try:
+        audio = model.generate(
+            target_text=text_clean,
+            speaker_centroid=centroid,
+            cfg_value=2.0,
+            inference_timesteps=20,
+            max_len=2000,
+            retry_badcase=True,
+        )
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower():
+            print("  OOM, retrying with timesteps=10...", file=sys.stderr)
+            if hasattr(torch.mps, "empty_cache"):
+                torch.mps.empty_cache()
+            audio = model.generate(
+                target_text=text_clean,
+                speaker_centroid=centroid,
+                cfg_value=2.0,
+                inference_timesteps=10,
+                max_len=2000,
+                retry_badcase=True,
+            )
+        else:
+            raise
+
+    wav = audio.squeeze().cpu().numpy()
+    duration = wav.size / sr
+    sf.write(output_path, wav, sr)
+    return True, duration
+
+
+# ------------------------------------------------------------------ #
+# Main
+# ------------------------------------------------------------------ #
 async def main():
-    parser = argparse.ArgumentParser(description="edge-tts TTS generation")
+    parser = argparse.ArgumentParser(description="TTS generation")
     parser.add_argument("source_dir", help="Path to source media folder")
+    parser.add_argument("--tts-engine", default="edge",
+                        choices=["edge", "bluemagpie"],
+                        help="TTS engine (edge=Edge TTS, bluemagpie=台灣藍鵲 TTS)")
+    # Edge TTS options
     parser.add_argument("--voice", default="zh-TW-YunJheNeural",
                         help="edge-tts voice name")
+    # BlueMagpie-TTS options
+    parser.add_argument("--speaker", default="hung_yi_lee",
+                        choices=["hung_yi_lee", "female_voice", "custom"],
+                        help="BlueMagpie-TTS speaker")
+    parser.add_argument("--centroid-path", default="",
+                        help="Path to .pt file for --speaker custom")
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir).expanduser().resolve()
@@ -569,36 +755,48 @@ async def main():
         print("Error: no active scenes with captions found")
         sys.exit(1)
 
-    # Check if all already have TTS
     pending = [item for item in active if not item.get("tts_file")]
 
     if not pending:
         print("All scenes already have TTS files.")
         sys.exit(0)
 
-    print(f"Generating TTS for {len(pending)} scenes (voice: {args.voice})...")
+    engine_name = "Edge TTS" if args.tts_engine == "edge" else "台灣藍鵲 TTS"
+    print(f"Generating TTS for {len(pending)} scenes ({engine_name})...")
 
     for i, item in enumerate(pending):
         sid = item["scene"]
         text = item["caption_short"]
-        out_name = f"scene_{sid:04d}.mp3"
-        out_path = tts_dir / out_name
 
-        # Get voice: check ANS_5 for gender preference
-        voice = args.voice
-
-        success = await generate_tts(text, out_path, voice)
-        if success and out_path.exists():
-            item["tts_file"] = str(out_path)
-            dur = len(text) / 4  # rough estimate
-            item["tts_duration_sec"] = round(dur, 1)
-            status = "✅"
+        if args.tts_engine == "edge":
+            out_name = f"scene_{sid:04d}.mp3"
+            out_path = tts_dir / out_name
+            success = await generate_edge_tts(text, str(out_path), args.voice)
+            if success and out_path.exists():
+                dur = len(text) / 4
+                status = "✅"
+            else:
+                status = "⚠️"
+                dur = 0
         else:
-            status = "⚠️"
+            out_name = f"scene_{sid:04d}.wav"
+            out_path = tts_dir / out_name
+            try:
+                ok, dur = generate_bluemagpie_tts(text, str(out_path),
+                                                  args.speaker, args.centroid_path)
+                status = "✅" if ok else "⚠️"
+            except Exception as e:
+                print(f"  Error: {e}", file=sys.stderr)
+                status = "⚠️"
+                ok = False
+                dur = 0
+
+        if status == "✅":
+            item["tts_file"] = str(out_path)
+            item["tts_duration_sec"] = round(dur, 1)
 
         print(f"  [{sid:04d}/{len(active)}] {status} {text} -> {out_name}", flush=True)
 
-        # Save progress every 5
         if (i + 1) % 5 == 0 or i == len(pending) - 1:
             with open(manifest_path, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
@@ -610,25 +808,85 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-**執行：**
+**執行（依 ANS_4 選擇）：
 
 ```bash
-# 男聲（預設）
-python3 "$SCRIPTS_DIR/generate_tts.py" "ANS_1" --voice zh-TW-YunJheNeural
+# Edge TTS — 男聲（預設）
+python3 "$SCRIPTS_DIR/generate_tts.py" "ANS_1" --tts-engine edge --voice zh-TW-YunJheNeural
 
-# 女聲（依問卷 ANS_5）
-python3 "$SCRIPTS_DIR/generate_tts.py" "ANS_1" --voice zh-TW-HsiaoChenNeural
+# Edge TTS — 女聲（依 ANS_4a）
+python3 "$SCRIPTS_DIR/generate_tts.py" "ANS_1" --tts-engine edge --voice zh-TW-HsiaoChenNeural
+
+# 台灣藍鵲 TTS — 李宏毅老師（依 ANS_4b）
+python3 "$SCRIPTS_DIR/generate_tts.py" "ANS_1" --tts-engine bluemagpie --speaker hung_yi_lee
+
+# 台灣藍鵲 TTS — 通用女聲（依 ANS_4b）
+python3 "$SCRIPTS_DIR/generate_tts.py" "ANS_1" --tts-engine bluemagpie --speaker female_voice
+
+# 台灣藍鵲 TTS — 自己的聲音（依 ANS_4b + ANS_4c）
+python3 "$SCRIPTS_DIR/generate_tts.py" "ANS_1" --tts-engine bluemagpie --speaker custom --centroid-path "ANS_4c"
 ```
 
 **產出：**
 - `temp/tts/scene_0001.mp3` ~ `scene_NNNN.mp3` — 每場景旁白音檔
 - `temp/manifest.json` 更新，每個 entry 新增 `tts_file` 與 `tts_duration_sec`
 
+### Step 11b — 音檔統一音量（loudnorm）
+
+不同 TTS 片段間音量可能不一致，用 FFmpeg EBU R128 loudnorm 全部正規化到 -16 LUFS（spoken word 標準）。
+
+**Edge TTS 產出是 MP3 → 先轉 WAV 再 normalize，最後轉回 MP3：**
+
+```bash
+TTS_DIR="ANS_1/temp/tts"
+
+for f in "$TTS_DIR"/*.mp3; do
+  tmp_wav="${f%.mp3}_tmp.wav"
+  ffmpeg -y -v quiet -i "$f" -af loudnorm=I=-16:LRA=1:TP=-1 "$tmp_wav"
+  ffmpeg -y -v quiet -i "$tmp_wav" "$f"
+  rm "$tmp_wav"
+done
+```
+
+**藍鵲 TTS 產出是 WAV → 直接 in-place：**
+
+```bash
+TTS_DIR="ANS_1/temp/tts"
+
+for f in "$TTS_DIR"/*.wav; do
+  tmp="${f%.wav}_norm.wav"
+  ffmpeg -y -v quiet -i "$f" -af loudnorm=I=-16:LRA=1:TP=-1 "$tmp"
+  mv "$tmp" "$f"
+done
+```
+
+### Step 11c — 每段 TTS 淡入 0.5 秒
+
+讓每段旁白開頭不會突兀切入：
+
+```bash
+TTS_DIR="ANS_1/temp/tts"
+
+# WAV（藍鵲 TTS）
+for f in "$TTS_DIR"/*.wav; do
+  tmp="${f%.wav}_fade.wav"
+  ffmpeg -y -v quiet -i "$f" -af afade=t=in:d=0.5 "$tmp"
+  mv "$tmp" "$f"
+done
+
+# MP3（Edge TTS）
+for f in "$TTS_DIR"/*.mp3; do
+  tmp="${f%.mp3}_fade.mp3"
+  ffmpeg -y -v quiet -i "$f" -af afade=t=in:d=0.5 "$tmp"
+  mv "$tmp" "$f"
+done
+```
+
 ---
 
-## Phase 4c：CC0 背景音樂（依 ANS_6）
+## Phase 4c：CC0 背景音樂（依 ANS_5）
 
-**若 ANS_6 為「不需要」，跳過此階段。**
+**若 ANS_5 為「不需要」，跳過此階段。**
 
 ### Step — 搜尋 CC0 BGM
 
@@ -640,7 +898,7 @@ uppbeat [style] free background music
 youtube audio library [genre] no copyright
 ```
 
-例如 ANS_6 = 「輕鬆」：
+例如 ANS_5 = 「輕鬆」：
 
 ```
 pixabay music relaxing travel background music free download
@@ -894,7 +1152,7 @@ python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
     │   └── export_scripts.py
     ├── scenes/               ← 切割後的獨立場景 MP4
     ├── thumbs/               ← 480px 縮圖（視覺描述用）
-    ├── tts/                  ← edge-tts 旁白音檔 MP3
+    ├── tts/                  ← TTS 旁白音檔（Edge TTS → MP3 / 藍鵲 → WAV）
     └── bgm/                  ← CC0 背景音樂 MP3
 ```
 
@@ -958,16 +1216,40 @@ add_texts(entries=[{
     }
 } for item in script.scenes])
 
-# 如有 TTS 音檔，匯入並上旁白音軌
-for item in script.scenes:
-    if item.get("tts_file"):
-        import_media(source={path: item.tts_file})
-        add_clips(entries=[{
-            "mediaRef": ref_of_tts,
-            "startFrame": item.start_frame,
-            "endFrame": item.end_frame,
-            "trackIndex": audio_track_index
-        }])
+# ⚠️ 重要：TTS 與 BGM 上音軌
+#
+# 錯誤做法 ❌
+#   trackIndex=某數字 → 若該 track 不存在，clip 會被靜默丟棄！
+#
+# ⭐ 正確做法：分兩步驟上不同音軌
+
+### Step A — 一次上全部 TTS（共用一條 auto-created 音軌）
+
+fps = 30
+
+# 一次 call 全部 TTS clip（不要在 for 迴圈裡逐個 call）
+tts_entries = [
+    {"mediaRef": ref_of(scene.tts_file), "startFrame": scene.start_frame, "source": [0, scene.tts_duration_sec]}
+    for scene in active if scene.tts_file
+]
+add_clips(entries=tts_entries)
+# → 此時 TTS 在 A1（第一條 auto-created audio track）
+
+### Step B — 幫 BGM 建立第二條音軌
+
+# BGM 不能 omit trackIndex（會擠進 TTS 的 A1 軌，蓋掉 TTS！）
+# 解法：先取得目前 timeline 資訊，知道 A1 的 index，再指定 next index
+
+tl = get_timeline()
+audio_tracks = [t for t in tl.tracks if t.type == "audio"]
+next_audio_index = max(t.index for t in audio_tracks) + 1  # A1 在 index n → BGM 放 n+1
+
+bgm_clip = add_clips(entries=[{
+    "mediaRef": bgm_ref,
+    "startFrame": 0,
+    "source": [0, total_duration_sec],
+    "trackIndex": next_audio_index      # ← 指定下一格，Palmier 會開 A2
+}])
 ```
 
 ## MCP 工具速查（Palmier 側）
@@ -991,27 +1273,30 @@ for item in script.scenes:
 # 1. 匯入 BGM
 bgm_ref = import_media(source={path: script.bgm.file}).mediaRef
 
-# 2. 取得總長度（frames）
-total_frames = script.project.total_duration_sec * script.project.fps
+# 2. 取得總長度（seconds）
+total_sec = script.project.total_duration_sec
 
-# 3. 建立獨立音軌
-manage_tracks(set=[{"trackId": audio_track_id, "muted": False}])
+# 3. 放 BGM（與 TTS 不同軌）
+#    ⚠️ 不可 omit trackIndex！BGM 會進 TTS 同一軌，蓋掉旁白！
+#    ⭐ 指定 TTS 音軌的下一個 index（TTS 在 A1 → BGM 在 A2）
+tl = get_timeline()
+audio_indices = [t.index for t in tl.tracks if t.type == "audio"]
+bgm_track_index = max(audio_indices) + 1
 
-# 4. 放 BGM 到整條 timeline（從 frame 0 到結束）
-#    BGM 可能比 timeline 長或短，用 source 截取或讓它 loop
-add_clips(entries=[{
+#    ⭐ 用 source 取代 endFrame（避免超過 BGM 真實長度）
+bgm_clip_id = add_clips(entries=[{
     "mediaRef": bgm_ref,
     "startFrame": 0,
-    "endFrame": total_frames,
+    "source": [0, total_sec],
     "trackIndex": bgm_track_index
-}])
+}])[0].id  # 取 clips[0].id 需視實際 SDK 語法
 
-# 5. 調整 BGM 音量（不要蓋過旁白）
+# 4. 調整 BGM 音量（不要蓋過旁白）
 set_clip_properties(clipIds=[bgm_clip_id], volume=0.08)
 
-# 6. 淡入淡出
+# 5. 淡入淡出
 set_keyframes(clipId=bgm_clip_id, property="volume",
-              keyframes=[[0, 0], [60, 0.08], [total_frames-60, 0.08], [total_frames, 0]])
+              keyframes=[[0, 0], [60, 0.08], [total_sec*fps-60, 0.08], [total_sec*fps, 0]])
 ```
 
 ## 經驗教訓
@@ -1024,7 +1309,13 @@ set_keyframes(clipId=bgm_clip_id, property="volume",
 | 4 | **旁白每句控制 15-20 字** | 太長的旁白在 5 秒場景內唸不完 |
 | 5 | **HEIC 照片直接給 Palmier 處理** | 不需預轉 JPG，Palmier 原生支援 |
 | 6 | **先 remove_silence 再放 BGM** | silence 的 ripple 會切裂已定位的 BGM track |
-| 7 | **TTS 音檔在 Palmier 側上旁白軌** | edge-tts 產生的 MP3 經 `import_media` 匯入後，用 `add_clips` 放到獨立的旁白音軌，不要混入原始素材音軌 |
+| 7 | **TTS 音檔在 Palmier 側上旁白軌** | Edge TTS 產生的 MP3（或藍鵲 TTS 產生的 WAV）經 `import_media` 匯入後，用 `add_clips` 放到獨立的旁白音軌，不要混入原始素材音軌 |
 | 8 | **BGM 音量要低於旁白** | 背景音樂設 volume 0.05-0.1，不要蓋過原片音軌或 TTS。淡入 2s、淡出 2s |
 | 9 | **BGM 在 timeline 定位後不要 ripple** | `remove_silence()` 或 ripple 操作會切裂已定位的 BGM track。先定位素材、silence、TTS，最後才放 BGM |
 | 10 | **確認 CC0 授權** | 搜到的 BGM 一定要確認是 CC0 / Royalty Free，避免版權爭議 |
+| 16 | **BGM 用 `trackIndex` 放不同軌，不要 omit** | TTS 先放（omit trackIndex → A1），BGM 後放。若 BGM 也 omit trackIndex 會擠進 TTS 的 A1 軌，蓋掉旁白。解法：`get_timeline()` 找 A1 index → BGM 指定 `trackIndex: A1_index + 1`，Palmier 會開 A2 |
+| 11 | **場景偵測用 `showinfo` 不是 `setpts`** | `select='gt(scene,0.15)',setpts=N/FRAME_RATE/TB` 無法輸出正確的來源影格編號。改用 `select='gt(scene,0.15)',showinfo` 並解析 `pts_time` 來取得場景切換時間點 |
+| 12 | **合併 <1s 的走道晃動片段** | 走道拍攝、鏡頭快速移動時，ffmpeg 場景偵測會產生大量 <0.5s 的假陽性。合併門檻設 1 秒，低於此的片段往前/後合併 |
+| 13 | **Qwen 描述出現「模糊」＝跳過** | `qwen_desc` 若包含「模糊」、「無法辨識」、「黑色背景」等關鍵字，代表該片段是走道晃動或無意義畫面，直接跳過 |
+| 14 | **同來源 App 錄影超過 5 段 → 只留 3-5 段** | 手機螢幕錄影的每個畫面內容差異很小，留開頭、關鍵操作、結尾各一即可，中間步驟全跳過 |
+| 15 | **用 `source: [0, dur]` 取代 `endFrame`** | `endFrame` 若超過音檔真實長度，clip 會被拒絕。用 `source` 指定來源區間秒數最安全 |

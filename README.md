@@ -1,21 +1,20 @@
 # palmier-autocut-scene-tts
 
-AI Agent 技能（Skill）——將原始素材（MP4 + HEIC）自動切分成獨立場景，配上視覺描述和口語旁白，輸出可直接餵給 [Palmier Pro](https://palmier.pro) MCP 使用的腳本。
-專為 OpenCode 設計。
+AI Agent 技能（Skill）—— 將原始素材（MP4 + HEIC）自動切分成獨立場景，Qwen2.5VL 視覺描述 + 口語旁白 + TTS 語音合成，輸出可直接餵給 [Palmier Pro](https://palmier.pro) MCP 剪輯的完整影片。
 
 ## 功能
 
-當使用者說出「幫我切場景剪片、切場景剪片、場景剪輯、剪片、開箱影片、旅遊影片剪輯」等關鍵字時自動觸發，執行完整場景式剪片流程：
-
 | Phase | 內容 |
 |:-----:|:------|
-| 1. 問卷 | 素材路徑、跳過檔案、場景秒數、旁白風格、TTS 語音、BGM 風格 |
+| 1. 問卷 | 素材路徑、場景秒數、旁白風格、TTS 引擎、BGM 風格 |
 | 2. 場景切割 | ffmpeg scene detect → `temp/scenes/` + `temp/manifest.json` |
 | 3. 視覺描述 | Qwen2.5VL 批次描述每場景內容 |
-| 4. 旁白撰寫 | opencode 依篩選規則 + 口語風格寫旁白 |
-| 4b. TTS 合成 | edge-tts 生成每場景旁白音檔 → `temp/tts/` |
+| 3b. 過濾 | 晃動／重複／無關場景自動跳過 |
+| 4. 旁白撰寫 | 15-25 字輕鬆通俗口語旁白 |
+| 4b. TTS 合成 | Edge TTS（男/女聲）或 台灣藍鵲 TTS（李宏毅/女聲/自訂 .pt） |
 | 4c. BGM | CC0 背景音樂搜尋與下載 → `temp/bgm/`（可選） |
-| 5. 產出 | `palmier_script.json` + `subtitles.srt` + `script_narrative.txt` |
+| 5. 輸出 | `palmier_script.json` + `subtitles.srt` + `script_narrative.txt` |
+| 6. 剪輯 | 用 MCP 呼叫 Palmier Pro 自動上片、上字幕、上 TTS + BGM、輸出 MP4 |
 
 ## 安裝
 
@@ -30,38 +29,59 @@ brew install ffmpeg
 brew install ollama
 ollama pull qwen2.5vl:7b
 
-# 4. 啟動 ollama（背景執行）
+# 4. 啟動 ollama
 ollama serve &
+
+# 5. Edge TTS（選用）
+pip install edge-tts
+
+# 6. 台灣藍鵲 TTS（選用）
+pip install bluemagpie-tts soundfile
 ```
 
 ## 使用方式
 
-在 opencode 中載入 skill：
+在 opencode 中：
 
 ```
-幫我切場景剪片
+幫我剪片，素材在 ~/Desktop/日航商務艙初體驗/
 ```
 
-依序回答問卷，剩下交給流程自動完成。
+依序回答問卷，過程中旁白寫完後會暫停讓您確認修改，確認後自動完成 TTS → BGM → Palmier Pro 剪輯 → 輸出 MP4。
 
-## 互動問卷（4 題）
+## 互動問卷
 
 | 代號 | 問題 | 預設值 |
 |:----:|:-----|:------:|
-| ANS_1 | 素材資料夾路徑？ | `~/Desktop/日航商務艙初體驗/` |
-| ANS_2 | 跳過的檔案？（逗號分隔，或留空） | `商務艙開箱_1.MP4` |
-| ANS_3 | 每個場景固定秒數？ | `5` |
-| ANS_4 | 旁白口吻偏好？ | `輕鬆` |
-| ANS_5 | TTS 語音？（男聲 / 女聲） | `男聲` |
-| ANS_6 | 背景音樂風格？（不需要 / 輕鬆 / 活潑 / 寧靜 / 自訂） | `不需要` |
+| ANS_1 | 素材資料夾路徑？ | `~/Desktop/影片主題資料夾` |
+| ANS_2 | 最大場景秒數？ | `5`（3~5s 動態） |
+| ANS_3 | 旁白口吻偏好？ | `輕鬆通俗幽默` |
+| ANS_4 | TTS 引擎？ | `Edge TTS` |
+| ANS_4a | 語音性別？（Edge TTS） | `男聲` |
+| ANS_4b | 聲音選擇？（藍鵲 TTS） | `李宏毅老師` |
+| ANS_4c | .pt 路徑？（自訂聲音） | `~/Desktop/剪片ing/自己的聲音向量/my_voice.pt` |
+| ANS_5 | 背景音樂風格？ | `輕鬆` |
 
 ## 輸出產物
 
-| 檔案 | 格式 | 用途 |
-|:----|:----|:------|
-| `palmier_script.json` | JSON | 餵給 Palmier Pro MCP（`add_clips` + `add_texts`） |
-| `subtitles.srt` | SRT | 標準字幕檔，可匯入任何剪輯軟體 |
-| `script_narrative.txt` | 純文字 | 給人看的剪輯腳本，含場景順序與旁白 |
+| 檔案 | 用途 |
+|:----|:------|
+| `日航商務艙初體驗-v?.mp4` | 最終影片（經 Palmier Pro MCP 剪輯輸出） |
+| `palmier_script.json` | 場景 metadata（僅參考，Palmier Pro 不吃此檔） |
+| `subtitles.srt` | 標準字幕檔 |
+| `script_narrative.txt` | 給人看的剪輯腳本 |
+| `temp/manifest.json` | **管線核心資料檔**，各階段讀寫傳遞 |
+
+## 關鍵更新
+
+### v2 新增功能
+
+- **旁白檢查點**：Phase 4 完成後暫停，輸出旁白表供使用者確認修改
+- **音檔 loudnorm 統一音量**：所有 TTS 正規化至 -16 LUFS
+- **TTS 淡入 0.5s**：每段旁白開頭平滑切入
+- **台灣藍鵲 TTS + 自訂聲音向量**：支援 `my_voice.pt`
+- **Palmier Pro 自動剪輯**：直接透過 MCP 建立專案、上片、上字幕、上音軌、輸出 MP4
+- **TTS / BGM 分軌**：TTS 放 A1，BGM 放 A2（vol 0.08 + 淡入淡出）
 
 ## 工作流程
 
@@ -69,19 +89,25 @@ ollama serve &
 素材資料夾
   │
   ▼
-Phase 1 ─ 問卷（路徑、跳過、秒數、風格、TTS 語音、BGM 風格）
+Phase 1 ─ 問卷（路徑、秒數、風格、TTS 引擎、BGM 風格）
   │
   ▼
 Phase 2 ─ ffmpeg 場景偵測 → temp/scenes/ + temp/manifest.json
   │
   ▼
-Phase 3 ─ Qwen2.5VL 視覺描述 → 寫入 temp/manifest.json
+Phase 3 ─ Qwen2.5VL 視覺描述 → 寫入 manifest.json
   │
   ▼
-Phase 4 ─ opencode 篩選場景 + 撰寫口語旁白 → 寫入 temp/manifest.json
+Phase 3b ─ 晃動／重複／無關場景自動跳過
   │
   ▼
-Phase 4b ─ edge-tts 語音合成 → temp/tts/*.mp3
+Phase 4 ─ 撰寫 15-25 字輕鬆口語旁白 → 寫入 manifest.json
+  │
+  ▼
+✋ 旁白檢查點 ─ 輸出旁白表，使用者確認後繼續
+  │
+  ▼
+Phase 4b ─ TTS 合成 → loudnorm 統一音量 → 淡入 0.5s → temp/tts/
   │
   ▼
 Phase 4c ─ CC0 BGM 搜尋下載 → temp/bgm/bgm.mp3（可選）
@@ -90,52 +116,25 @@ Phase 4c ─ CC0 BGM 搜尋下載 → temp/bgm/bgm.mp3（可選）
 Phase 5 ─ 輸出 palmier_script.json + subtitles.srt + script_narrative.txt
   │
   ▼
-匯入 Palmier Pro → add_clips 上片 → add_texts 上字幕
-→ import_media TTS → add_clips 旁白音軌
-→ import_media BGM → add_clips 背景音軌（音量 0.08）→ 輸出成品
+Phase 6 ─ Palmier Pro MCP 自動剪輯
+       ├─ 開專案、匯入素材
+       ├─ add_clips 上片
+       ├─ add_texts 上字幕（白字 48pt 置中下方）
+       ├─ add_clips TTS → A1 音軌
+       ├─ add_clips BGM → A2 音軌（vol 0.08 + 2s 淡入淡出）
+       └─ export_project → MP4
 ```
-
-## 關鍵原則
-
-- **HEIC 不轉檔**：Palmier Pro 原生支援 HEIC 匯入
-- **場景檔名規則**：`scene_序號_原始檔名.mp4`
-- **視覺模型誤判 → 跳過**：Qwen 描述與畫面不符時，不硬湊旁白
-- **同來源多段重複 → 只留關鍵**：如同支手機錄影拍 10 段 App 畫面，只保留 2-3 個代表性片段
-- **旁白輕鬆口語**：像在跟朋友聊天，不用書面語
-- **暫存進 temp/**：過程中的場景影片、縮圖、腳本、TTS 音檔一律放 `temp/` 下，根目錄只留原始檔與最終產出
 
 ## 依賴套件
 
-| 套件 | 用途 | 安裝方式 |
-|:----|:-----|:---------|
-| ffmpeg | 場景偵測、影片切割、縮圖 | `brew install ffmpeg` |
-| ollama | 視覺模型（qwen2.5vl:7b） | `brew install ollama && ollama pull qwen2.5vl:7b` |
-| edge-tts | 旁白語音合成 | `pip install edge-tts` |
-| websearch | BGM/CC0 音樂搜尋 | opencode 內建 |
-| Python 3 | 執行腳本 | 內建於 macOS，或 `brew install python` |
-| sips | HEIC 縮圖（macOS 內建） | 已內建 |
-
-## 產出檔案一覽
-
-執行完成後，素材資料夾內會產生：
-
-```
-素材資料夾/
-├── palmier_script.json        ← → 給 Palmier Pro MCP（含 tts_file + bgm）
-├── subtitles.srt               ← → 字幕檔
-├── script_narrative.txt       ← → 給人看的腳本
-└── temp/                      ← 暫存檔（可清空）
-    ├── manifest.json          ← 場景清單（含描述、旁白、TTS、BGM）
-    ├── scripts/               ← Python 腳本
-    │   ├── run_scene_detect.py
-    │   ├── qwen_describe.py
-    │   ├── generate_tts.py
-    │   └── export_scripts.py
-    ├── scenes/                ← 切割後的獨立場景 MP4
-    ├── thumbs/                ← 480px 縮圖
-    ├── tts/                   ← edge-tts 旁白音檔 MP3
-    └── bgm/                   ← CC0 背景音樂 MP3
-```
+| 套件 | 用途 |
+|:----|:-----|
+| ffmpeg | 場景偵測、影片切割、縮圖、loudnorm、afade |
+| ollama + qwen2.5vl:7b | 視覺描述 |
+| edge-tts | Edge TTS 語音合成 |
+| bluemagpie-tts + soundfile | 台灣藍鵲 TTS（選用） |
+| Python 3 | 執行腳本 |
+| sips | HEIC 縮圖（macOS 內建） |
 
 ## 授權
 
