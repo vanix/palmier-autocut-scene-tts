@@ -44,7 +44,7 @@ pip install bluemagpie-tts soundfile
 在 opencode 中：
 
 ```
-幫我剪片，素材在 ~/Desktop/日航商務艙初體驗/
+幫我剪片，素材在 ~/Desktop/影片主題資料夾
 ```
 
 依序回答問卷，過程中旁白寫完後會暫停讓您確認修改，確認後自動完成 TTS → BGM → Palmier Pro 剪輯 → 輸出 MP4。
@@ -56,7 +56,7 @@ pip install bluemagpie-tts soundfile
 | ANS_1 | 素材資料夾路徑？ | `~/Desktop/影片主題資料夾` |
 | ANS_2 | 最大場景秒數？ | `5`（3~5s 動態） |
 | ANS_3 | 旁白口吻偏好？ | `輕鬆通俗幽默` |
-| ANS_4 | TTS 引擎？ | `Edge TTS` |
+| ANS_4 | TTS 引擎？（Edge TTS / 台灣藍鵲 TTS） | `Edge TTS` |
 | ANS_4a | 語音性別？（Edge TTS） | `男聲` |
 | ANS_4b | 聲音選擇？（藍鵲 TTS） | `李宏毅老師` |
 | ANS_4c | .pt 路徑？（自訂聲音） | `~/Desktop/剪片ing/自己的聲音向量/my_voice.pt` |
@@ -66,7 +66,7 @@ pip install bluemagpie-tts soundfile
 
 | 檔案 | 用途 |
 |:----|:------|
-| `日航商務艙初體驗-v?.mp4` | 最終影片（經 Palmier Pro MCP 剪輯輸出） |
+| `影片主題-v?.mp4` | 最終影片（經 Palmier Pro MCP 剪輯輸出） |
 | `subtitles.srt` | 標準字幕檔 |
 | `script_narrative.txt` | 給人看的剪輯腳本（若要修改旁白，直接編輯 `manifest.json` 的 `caption_short`） |
 | `temp/manifest.json` | **管線核心資料檔**，各階段讀寫傳遞 |
