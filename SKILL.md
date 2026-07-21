@@ -21,7 +21,7 @@ description: >
 | 4 | **旁白輕鬆口語** | 像在跟朋友聊天，不用書面語或旅遊雜誌體。善用檔名梗 |
 | 5 | **同一來源多段子場景內容重複 → 只留關鍵** | 如同支手機錄影拍 10 段 App 畫面，只保留 2-3 個代表性片段 |
 | 6 | **暫存檔全進 `temp/`** | 場景影片、縮圖、腳本、manifest 都放在 `temp/` 下，素材根目錄只留原始檔與最終產出 |
-| 7 | **最終產出四種格式** | `palmier_script.json`（給 MCP）+ `subtitles.srt`（字幕）+ `script_narrative.txt`（給人看的腳本）+ `temp/tts/*.mp3`（旁白音檔） |
+| 7 | **最終產出三種格式** | `subtitles.srt`（字幕）+ `script_narrative.txt`（給人看的腳本）+ `temp/tts/*.wav`（旁白音檔） |
 | 8 | **步驟失敗 → retry 一次，再失敗則告知使用者** | 不要靜靜卡住或假設成功 |
 | 9 | **TTS 音檔全部 loudnorm 統一音量** | 不同 TTS 片段之間音量可能不一致，用 `ffmpeg -af loudnorm=I=-16:LRA=1:TP=-1` 對所有 WAV/MP3 做 EBU R128 正規化 |
 
@@ -954,7 +954,7 @@ with open("ANS_1/temp/manifest.json", "w") as f:
 """Phase 5: Export output formats.
 Reads temp/manifest.json (with caption_short + tts_file),
 calculates cumulative timing,
-outputs palmier_script.json + subtitles.srt + script_narrative.txt
+outputs subtitles.srt + script_narrative.txt
 
 Usage: python3 export_scripts.py <素材路徑> [--fps 30]
 """
@@ -977,7 +977,7 @@ def estimate_tts_duration(text):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export scenes to Palmier scripts")
+    parser = argparse.ArgumentParser(description="Export subtitles + narrative script")
     parser.add_argument("source_dir", help="Path to source media folder")
     parser.add_argument("--fps", type=int, default=30, help="Timeline FPS")
     args = parser.parse_args()
@@ -1018,49 +1018,7 @@ def main():
     print(f"Active scenes: {len(active)}/{len(manifest)}")
     print(f"Total duration: {total_sec:.1f}s ({total_sec/60:.1f} min)")
 
-    # --- Output 1: palmier_script.json ---
-    script = {
-        "project": {
-            "name": source_dir.name,
-            "fps": fps,
-            "resolution": "1920x1080",
-            "total_scenes": len(active),
-            "total_duration_sec": round(total_sec, 1),
-        },
-        "scenes": [],
-        "bgm": manifest.get("bgm", manifest.get("bgm_file") and {
-            "file": manifest["bgm_file"],
-            "name": manifest.get("bgm_name", ""),
-            "duration_sec": manifest.get("bgm_duration", 0),
-            "license": manifest.get("bgm_license", ""),
-        }) or None,
-    }
-
-    for item in active:
-        scene_entry = {
-            "scene": item["scene"],
-            "source_file": item["source_file"],
-            "type": item["type"],
-            "source_path": item.get("source_path", ""),
-            "source_start_sec": item.get("source_start"),
-            "source_end_sec": item.get("source_end"),
-            "duration_sec": item.get("duration"),
-            "start_frame": item["_start_frame"],
-            "end_frame": item["_end_frame"],
-            "subtitle": item["caption_short"],
-            "tts_approx_sec": item["_tts_sec"],
-            "tts_file": item.get("tts_file"),
-        }
-        # Remove None values
-        scene_entry = {k: v for k, v in scene_entry.items() if v is not None}
-        script["scenes"].append(scene_entry)
-
-    palmier_path = source_dir / "palmier_script.json"
-    with open(palmier_path, "w", encoding="utf-8") as f:
-        json.dump(script, f, ensure_ascii=False, indent=2)
-    print(f"📄 {palmier_path} ({len(active)} scenes)")
-
-    # --- Output 2: subtitles.srt ---
+    # --- Output 1: subtitles.srt ---
     srt_path = source_dir / "subtitles.srt"
     with open(srt_path, "w", encoding="utf-8") as f:
         for i, item in enumerate(active):
@@ -1070,7 +1028,7 @@ def main():
             f.write(f"{i+1}\n{fmt_time(start)} --> {fmt_time(end)}\n{text}\n\n")
     print(f"📄 {srt_path} ({len(active)} entries)")
 
-    # --- Output 3: script_narrative.txt ---
+    # --- Output 2: script_narrative.txt ---
     txt_path = source_dir / "script_narrative.txt"
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(f"{'='*60}\n")
@@ -1125,7 +1083,6 @@ python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
 ### Step 13 — 驗證輸出
 
 確認根目錄下有：
-- `palmier_script.json` — 含每個場景的 **tts_file** + 專案的 **bgm** 資訊
 - `subtitles.srt` — 標準字幕
 - `script_narrative.txt` — 腳本文字
 
@@ -1140,7 +1097,6 @@ python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
 
 ```
 素材資料夾/
-├── palmier_script.json       ← → 給 Palmier Pro MCP（含 tts_file + bgm）
 ├── subtitles.srt              ← → 字幕檔
 ├── script_narrative.txt      ← → 給人看的腳本
 └── temp/                     ← 暫存檔（可清空）
@@ -1154,102 +1110,6 @@ python3 "$SCRIPTS_DIR/export_scripts.py" "ANS_1" --fps 30
     ├── thumbs/               ← 480px 縮圖（視覺描述用）
     ├── tts/                  ← TTS 旁白音檔（Edge TTS → MP3 / 藍鵲 → WAV）
     └── bgm/                  ← CC0 背景音樂 MP3
-```
-
-## Palmier Script JSON 規格
-
-`palmier_script.json` 是核心輸出，每個 scene entry 直對應到 Palmier Pro MCP 工具：
-
-### `add_clips` 對應
-
-```json
-{
-  "scene": 1,
-  "source_file": "0_0貴賓室位置.MP4",
-  "type": "video",
-  "source_path": "/Users/xxx/0_0貴賓室位置.MP4",
-  "source_start_sec": 0.5,
-  "source_end_sec": 5.5,
-  "duration_sec": 5.0,
-  "start_frame": 0,
-  "end_frame": 150,
-  "subtitle": "走～來看看日航貴賓室長怎樣",
-  "tts_approx_sec": 2.5,
-  "tts_file": "/path/to/temp/tts/scene_0001.mp3"
-}
-```
-
-使用方式：
-
-```python
-# 1. import_media(source={path: "素材路徑/"}) → 取得 mediaRefs
-# 2. 逐場景 add_clips:
-#    video:  add_clips(entries=[{
-#        mediaRef: ref_of_source_file,
-#        source: [source_start_sec, source_end_sec],
-#        startFrame: start_frame
-#    }])
-#    image:  add_clips(entries=[{
-#        mediaRef: ref_of_source_file,
-#        startFrame: start_frame,
-#        endFrame: end_frame  # duration_sec * fps
-#    }])
-# 3. 累積 startFrame 依序上片
-```
-
-### `add_texts` + TTS 音檔
-
-```python
-# 上完所有 clip 後，一次 add_texts 上字幕
-add_texts(entries=[{
-    "startFrame": item.start_frame,
-    "endFrame": item.end_frame,
-    "content": item.subtitle,
-    "style": {
-        "color": "#FFFFFF",
-        "fontSize": 48,
-        "alignment": "center"
-    },
-    "transform": {
-        "centerX": 0.5,
-        "centerY": 0.85
-    }
-} for item in script.scenes])
-
-# ⚠️ 重要：TTS 與 BGM 上音軌
-#
-# 錯誤做法 ❌
-#   trackIndex=某數字 → 若該 track 不存在，clip 會被靜默丟棄！
-#
-# ⭐ 正確做法：分兩步驟上不同音軌
-
-### Step A — 一次上全部 TTS（共用一條 auto-created 音軌）
-
-fps = 30
-
-# 一次 call 全部 TTS clip（不要在 for 迴圈裡逐個 call）
-tts_entries = [
-    {"mediaRef": ref_of(scene.tts_file), "startFrame": scene.start_frame, "source": [0, scene.tts_duration_sec]}
-    for scene in active if scene.tts_file
-]
-add_clips(entries=tts_entries)
-# → 此時 TTS 在 A1（第一條 auto-created audio track）
-
-### Step B — 幫 BGM 建立第二條音軌
-
-# BGM 不能 omit trackIndex（會擠進 TTS 的 A1 軌，蓋掉 TTS！）
-# 解法：先取得目前 timeline 資訊，知道 A1 的 index，再指定 next index
-
-tl = get_timeline()
-audio_tracks = [t for t in tl.tracks if t.type == "audio"]
-next_audio_index = max(t.index for t in audio_tracks) + 1  # A1 在 index n → BGM 放 n+1
-
-bgm_clip = add_clips(entries=[{
-    "mediaRef": bgm_ref,
-    "startFrame": 0,
-    "source": [0, total_duration_sec],
-    "trackIndex": next_audio_index      # ← 指定下一格，Palmier 會開 A2
-}])
 ```
 
 ## MCP 工具速查（Palmier 側）
@@ -1267,14 +1127,12 @@ bgm_clip = add_clips(entries=[{
 
 ### BGM 音軌（Palmier Pro 側）
 
-如 `palmier_script.json` 含 `bgm` 欄位：
-
 ```python
 # 1. 匯入 BGM
-bgm_ref = import_media(source={path: script.bgm.file}).mediaRef
+bgm_ref = import_media(source={path: "素材路徑/temp/bgm/bgm.mp3"}).mediaRef
 
-# 2. 取得總長度（seconds）
-total_sec = script.project.total_duration_sec
+# 2. 取得總長度（seconds 或 total_frames / fps）
+total_sec = total_frames / fps
 
 # 3. 放 BGM（與 TTS 不同軌）
 #    ⚠️ 不可 omit trackIndex！BGM 會進 TTS 同一軌，蓋掉旁白！
